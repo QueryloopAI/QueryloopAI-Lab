@@ -60,7 +60,7 @@ Added LLM architectures i.e. Llama, phi, mixtral.
 
 Let's get this thing running! Follow the next steps:
 
-1. `git clone https://github.com/abideenml/llm.pth.git`
+1. `git clone https://github.com/QueryloopAI/QueryloopAI-Lab.git`
 2. Navigate into project directory `cd path_to_repo`
 3. Create a new venv environment and run `pip install -e .`
 4. Run the `llm/utils/prepare-dataset.py` file for data downloading and tokenization.
@@ -82,13 +82,13 @@ Finally there are a couple more todos which I'll hopefully add really soon:
 If you find this code useful, please cite the following:
 
 ```
-@misc{Zain2024llm.pth,
-  author = {Zain, Abideen},
+@misc{QueryloopAI-Lab,
+  author = {QueryloopAI-Lab},
   title = {llm.pth},
   year = {2024},
   publisher = {GitHub},
   journal = {GitHub repository},
-  howpublished = {\url{https://github.com/abideenml/llm.pth}},
+  howpublished = {\url{https://github.com/QueryloopAI/QueryloopAI-Lab}},
 }
 ```
 
