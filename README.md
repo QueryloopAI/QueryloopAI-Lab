@@ -91,11 +91,3 @@ If you find this code useful, please cite the following:
   howpublished = {\url{https://github.com/QueryloopAI/QueryloopAI-Lab}},
 }
 ```
-
-## Connect with me
-
-If you'd love to have some more AI-related content in your life :nerd_face:, consider:
-
-* Connect and reach me on [LinkedIn](https://www.linkedin.com/in/zaiinulabideen/) and [Twitter](https://twitter.com/zaynismm)
-* Follow me on 📚 [Medium](https://medium.com/@zaiinn440)
-* Check out my 🤗 [HuggingFace](https://huggingface.co/abideen)
