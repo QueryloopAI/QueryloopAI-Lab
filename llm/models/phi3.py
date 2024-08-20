@@ -1,16 +1,9 @@
 from __future__ import annotations
-import math
-import os
-import json
+import math, os, json, torch, lightning as L
 from dataclasses import dataclass
-import torch
 from tqdm import tqdm
-import torch.nn as nn
-from torch import Tensor
 from typing import Any
 from safetensors import safe_open
-from huggingface_hub import snapshot_download
-import lightning as L
 from lightning.pytorch.utilities.model_summary import ModelSummary
 
 
@@ -35,7 +28,7 @@ class KVCache:
         self.value: torch.Tensor = torch.zeros(shape, device=device, dtype=dtype)
         self.max_seq_length = max_seq_length
 
-    def forward(self, keys: Tensor, values: Tensor, start_pos: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(self, keys: torch.Tensor, values: torch.Tensor, start_pos: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         bsz, T, _, _ = keys.shape
         # print(f"start_pos={start_pos}, T={T}, bsz={bsz}")
         self.key[:bsz, start_pos : start_pos + T] = keys
@@ -45,7 +38,7 @@ class KVCache:
         return keys, values
 
 
-class RoPE(nn.Module):
+class RoPE(torch.nn.Module):
     def __init__(
         self,
         dims: int,
@@ -63,7 +56,7 @@ class RoPE(nn.Module):
     def _extra_repr(self):
         return f"{self.dims}, traditional={self.traditional}"
 
-    def _compute_rope(self, costheta, sintheta, x) -> Tensor:
+    def _compute_rope(self, costheta, sintheta, x) -> torch.Tensor:
         x1 = x[..., : self.dims // 2]
         x2 = x[..., self.dims // 2 : self.dims]
         rx1 = x1 * costheta - x2 * sintheta
@@ -88,7 +81,7 @@ class RoPE(nn.Module):
 
         return rx
 
-    def forward(self, x: Tensor, offset: int = 0):
+    def forward(self, x: torch.Tensor, offset: int = 0):
         shape = x.shape
         x = x.reshape(-1, shape[-2], shape[-1])
         N = x.shape[1] + offset
@@ -124,17 +117,17 @@ class RoPE(nn.Module):
         return torch.cos(theta), torch.sin(theta)
 
 
-def new_gelu(x: Tensor) -> Tensor:
+def new_gelu(x: torch.Tensor) -> torch.Tensor:
     return (
         0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
     )
 
 
-class MLP(nn.Module):
+class MLP(torch.nn.Module):
     def __init__(self, dim, hidden):
         super().__init__()
-        self.fc1 = nn.Linear(dim, hidden)
-        self.fc2 = nn.Linear(hidden, dim)
+        self.fc1 = torch.nn.Linear(dim, hidden)
+        self.fc2 = torch.nn.Linear(hidden, dim)
 
     def forward(self, x: torch.Tensor):
         x = self.fc1(x)
@@ -142,15 +135,15 @@ class MLP(nn.Module):
         return self.fc2(x)
 
 
-class LayerNorm(nn.LayerNorm):
+class LayerNorm(torch.nn.LayerNorm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return super().forward(x)
 
 
-class PhiMHA(nn.Module):
+class PhiMHA(torch.nn.Module):
     def __init__(self, layer_idx, dim, num_heads, rotary_dim) -> None:
         super().__init__()
         self.dim = dim
@@ -158,20 +151,20 @@ class PhiMHA(nn.Module):
         self.head_dim = dim // num_heads
         self.layer_idx = layer_idx
 
-        self.k_proj = nn.Linear(dim, dim)
-        self.q_proj = nn.Linear(dim, dim)
-        self.v_proj = nn.Linear(dim, dim)
-        self.dense = nn.Linear(dim, dim)
+        self.k_proj = torch.nn.Linear(dim, dim)
+        self.q_proj = torch.nn.Linear(dim, dim)
+        self.v_proj = torch.nn.Linear(dim, dim)
+        self.dense = torch.nn.Linear(dim, dim)
 
         self.rope = RoPE(int(rotary_dim * self.head_dim), traditional=False)
 
     def forward(
         self,
-        x: Tensor,
-        mask: Tensor = None,
+        x: torch.Tensor,
+        mask: torch.Tensor = None,
         kv_cache: KVCache | None = None,
-        position_ids: Tensor | None = None,
-    ) -> Tensor:
+        position_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         batch_size, seq_length, d_model = x.shape
         # print(f"{batch_size}, {seq_length}, {d_model}")
         k = self.k_proj(x)
@@ -185,9 +178,9 @@ class PhiMHA(nn.Module):
         if kv_cache is not None:
             k, v = kv_cache.forward(k, v, position_ids)
 
-        k: Tensor = k.transpose(1, 2).to(torch.float32)  # shape = (B, num_heads, seq_len, head_dim)
-        q: Tensor = q.transpose(1, 2).to(torch.float32)
-        v: Tensor = v.transpose(1, 2).to(torch.float32)
+        k: torch.Tensor = k.transpose(1, 2).to(torch.float32)  # shape = (B, num_heads, seq_len, head_dim)
+        q: torch.Tensor = q.transpose(1, 2).to(torch.float32)
+        v: torch.Tensor = v.transpose(1, 2).to(torch.float32)
 
         offset = position_ids if kv_cache else 0
 
@@ -219,7 +212,7 @@ class PhiMHA(nn.Module):
         return output
 
 
-class Block(nn.Module):
+class Block(torch.nn.Module):
     def __init__(
         self,
         config: PhiConfig,
@@ -245,16 +238,16 @@ class Block(nn.Module):
         return self.mixer(x, mask, kv_cache, position_ids) + self.mlp(x) + residual
 
 
-class Phi(nn.Module):
+class Phi(torch.nn.Module):
     def __init__(self, config: PhiConfig) -> None:
         super().__init__()
         self.config = config
-        self.wte = nn.Embedding(config.vocab_size, config.d_model)
-        self.layers = nn.ModuleList([Block(config, i) for i in range(config.num_layers)])
+        self.wte = torch.nn.Embedding(config.vocab_size, config.d_model)
+        self.layers = torch.nn.ModuleList([Block(config, i) for i in range(config.num_layers)])
 
         self.ln = LayerNorm(config.d_model, eps=config.eps)
-        self.lm_head = nn.Linear(config.d_model, config.vocab_size)
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size)
+        self.loss_fn = torch.nn.CrossEntropyLoss()
 
         mask = torch.full((1, 1, config.seq_len, config.seq_len), float("-inf"))
 
@@ -268,7 +261,7 @@ class Phi(nn.Module):
         mask = torch.triu(mask, diagonal=1)
         self.register_buffer("mask", mask)
 
-    def forward(self, x, kv_cache: list[KVCache] | None = None, position_ids=None):
+    def forward(self, x, kv_cache: list[KVCache] | None = None, position_ids=None, targets=None):
         mask = self.mask
         if kv_cache is not None:
             x = x[:, position_ids:]
@@ -283,10 +276,13 @@ class Phi(nn.Module):
             x = layer(x.to(self.wte.weight.dtype), mask, cache, position_ids=position_ids)
 
         x = self.ln(x)
-        x = self.lm_head(x)
-        return x
+        logits = self.vocab_proj(x)
+        loss = None
+        if targets is not None:
+            loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
-    def loss(self, logits: Tensor, labels: Tensor):
+    def loss(self, logits: torch.Tensor, labels: torch.Tensor):
         loss = self.loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
         return loss
 
@@ -306,7 +302,7 @@ class Phi(nn.Module):
         return kv_cache
     
     @staticmethod
-    def from_pretrained(name: str) -> nn.Module:
+    def from_pretrained(name: str) -> torch.nn.Module:
         config = PhiConfig()
         model = Phi(config)
         # return model
@@ -445,7 +441,7 @@ def convert_int_to_shortened_string(num):
         return f"{num / 1000000000000:.1f}T"
 
 
-def model_summary(model: nn.Module, print_summary=False):
+def model_summary(model: torch.nn.Module, print_summary=False):
     "conver normal model to lightning model and print model summary"
     model = Model(model)
     summary = ModelSummary(model)
@@ -462,8 +458,5 @@ if __name__ == "__main__":
     device = "mps"
     model = Phi(PhiConfig).to(device)
     model = torch.compile(model)
-
-    print("-" * 100)
     print(model)
     print(model_summary(model))
-    print("-" * 100)
